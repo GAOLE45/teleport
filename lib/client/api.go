@@ -40,6 +40,10 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
+	"golang.org/x/crypto/ssh/terminal"
+
 	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/lib/auth"
 	"github.com/gravitational/teleport/lib/backend"
@@ -54,14 +58,16 @@ import (
 	"github.com/gravitational/teleport/lib/utils"
 	"github.com/gravitational/teleport/lib/utils/agentconn"
 
-	"github.com/docker/docker/pkg/term"
 	"github.com/gravitational/trace"
+
+	"github.com/docker/docker/pkg/term"
 	"github.com/jonboulle/clockwork"
-	log "github.com/sirupsen/logrus"
-	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/agent"
-	"golang.org/x/crypto/ssh/terminal"
+	"github.com/sirupsen/logrus"
 )
+
+var log = logrus.WithFields(logrus.Fields{
+	trace.Component: teleport.ComponentClient,
+})
 
 const (
 	// Directory location where tsh profiles (and session keys) are stored
@@ -80,8 +86,8 @@ type ForwardedPort struct {
 
 type ForwardedPorts []ForwardedPort
 
-// ToString() returns a string representation of a forwarded port spec, compatible
-// with OpenSSH's -L  flag, i.e. "src_host:src_port:dest_host:dest_port"
+// ToString returns a string representation of a forwarded port spec, compatible
+// with OpenSSH's -L  flag, i.e. "src_host:src_port:dest_host:dest_port".
 func (p *ForwardedPort) ToString() string {
 	sport := strconv.Itoa(p.SrcPort)
 	dport := strconv.Itoa(p.DestPort)
@@ -96,14 +102,17 @@ func (p *ForwardedPort) ToString() string {
 // to determine where to connect to from the remote machine.
 // More or less equivalent to OpenSSH's -D flag
 type DynamicForwardedPort struct {
-	SrcIP   string
+	// SrcIP is the IP address to listen on locally.
+	SrcIP string
+
+	// SrcPort is the port to listen on locally.
 	SrcPort int
 }
 
 type DynamicForwardedPorts []DynamicForwardedPort
 
-// ToString() returns a string representation of a dynamic port spec, compatible
-// with OpenSSH's -D  flag, i.e. "src_host:src_port"
+// ToString returns a string representation of a dynamic port spec, compatible
+// with OpenSSH's -D flag, i.e. "src_host:src_port".
 func (p *DynamicForwardedPort) ToString() string {
 	sport := strconv.Itoa(p.SrcPort)
 	if utils.IsLocalhost(p.SrcIP) {
@@ -869,7 +878,7 @@ func (tc *TeleportClient) startPortForwarding(nodeClient *NodeClient) error {
 			if err != nil {
 				return trace.Wrap(err)
 			}
-			go nodeClient.listenForDynamicForward(socket)
+			go nodeClient.dynamicListenAndForward(socket)
 		}
 	}
 	return nil
@@ -1399,10 +1408,10 @@ func (tc *TeleportClient) connectToProxy(ctx context.Context) (*ProxyClient, err
 			clientAddr:      tc.ClientAddr,
 		}
 	}
-	successMsg := fmt.Sprintf("[CLIENT] successful auth with proxy %v", proxyAddr)
+	successMsg := fmt.Sprintf("Successful auth with proxy %v", proxyAddr)
 	// try to authenticate using every non interactive auth method we have:
 	for i, m := range tc.authMethods() {
-		log.Infof("[CLIENT] connecting proxy=%v login='%v' method=%d", proxyAddr, sshConfig.User, i)
+		log.Infof("Connecting proxy=%v login='%v' method=%d", proxyAddr, sshConfig.User, i)
 		var sshClient *ssh.Client
 
 		sshConfig.Auth = []ssh.AuthMethod{m}
@@ -2020,7 +2029,7 @@ func runLocalCommand(command []string) error {
 	return cmd.Run()
 }
 
-// ToStringSpec() returns the same string spec which can be parsed by ParsePortForwardSpec
+// ToStringSpec returns the same string spec which can be parsed by ParsePortForwardSpec.
 func (fp ForwardedPorts) ToStringSpec() (retval []string) {
 	for _, p := range fp {
 		retval = append(retval, p.ToString())
